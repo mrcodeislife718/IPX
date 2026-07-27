@@ -6,9 +6,24 @@
 
 IPX is a privately operated, independent intellectual-property office and technology platform that modernizes the complete lifecycle of patents, trademarks, copyrights, ownership records, examination, protection, verification, maintenance, licensing, commercialization, monitoring, and enforcement support.
 
-IPX is not merely an evidence registry, certificate generator, encrypted vault, portfolio tracker, marketplace, or blockchain application. Those are parts of a much larger product: a complete modern patent-office system built for inventors, creators, developers, researchers, businesses, attorneys, professionals, and intellectual-property owners.
+IPX is not merely an evidence registry, certificate generator, encrypted vault, portfolio tracker, marketplace, or blockchain application. Those are supporting systems inside a much larger product: a complete modern patent-office platform for inventors, creators, developers, researchers, businesses, attorneys, professionals, and intellectual-property owners.
 
 > **Independent-office disclosure:** IPX is not a government agency and does not impersonate the USPTO or any other national or international authority. Where a statutory right must be issued or recognized by a government authority, that legal effect remains subject to the relevant jurisdiction. IPX provides its own private protection, filing, examination, evidence, certificate, monitoring, commercial, and professional-service infrastructure while supporting government-facing workflows where applicable.
+
+## Mission
+
+IPX is designed to replace fragmented, expensive, slow, and inaccessible intellectual-property workflows with one modern office that can protect, examine, document, verify, maintain, commercialize, and monitor intellectual property from creation through long-term ownership.
+
+Its goals are to:
+
+- provide a complete digital counterpart to traditional patent-office services;
+- make protection and professional support more accessible to independent inventors, disabled founders, minority founders, underserved communities, creators, and small businesses;
+- unify patents, trademarks, copyrights, ownership, evidence, examination, records, maintenance, and commercialization;
+- preserve confidential source material while still enabling public verification;
+- create durable, independently verifiable records and certificates;
+- support domestic and international protection strategies;
+- connect protection to licensing, transfer, diligence, financing readiness, and commercialization;
+- provide modern APIs, automation, monitoring, and white-label infrastructure for professionals and enterprises.
 
 ## Complete IP office scope
 
@@ -37,9 +52,7 @@ IPX provides modern versions of the complete patent-office and intellectual-prop
 - public-record verification;
 - professional, enterprise, API, and white-label services.
 
-## Product identity
-
-IPX combines the institutional scope of a modern patent office with digital-first infrastructure that traditional systems were not designed to provide.
+## Intellectual-property lifecycle
 
 ```text
 Create or acquire intellectual property
@@ -53,6 +66,74 @@ Create or acquire intellectual property
     -> monitor conflicts and misuse
     -> maintain and renew rights
     -> license, transfer, commercialize, or enforce
+```
+
+## Intended platform architecture
+
+```text
+User and authority surfaces
+├── Inventor and creator workspace
+├── Business and organization workspace
+├── Attorney and professional workspace
+├── Examiner and review workspace
+├── Administrative command center
+├── Public records and verification portal
+└── Developer, enterprise, and white-label APIs
+              │
+              ▼
+Identity, organization, ownership, and authority
+├── Identity assurance
+├── Organization records
+├── Inventor, author, contributor, and assignee records
+├── Role- and authority-based access
+└── Signatures, declarations, and delegations
+              │
+              ▼
+Filing and protection systems
+├── Invention intake
+├── Patent and design workflows
+├── Trademark workflows
+├── Copyright workflows
+├── Domestic and global protection paths
+└── Filing package generation
+              │
+              ▼
+Search, examination, and decision support
+├── Prior-art search
+├── Patentability and conflict analysis
+├── Formalities review
+├── Substantive examination workflows
+├── Office actions, amendments, and responses
+└── Review, opposition, challenge, and escalation records
+              │
+              ▼
+Issuance, records, and verification
+├── Certificates and CertIDs
+├── Public and private records
+├── Deterministic document rendering
+├── QR, URL, API, and offline verification
+├── Cryptographic commitments and signatures
+└── Immutable lifecycle history
+              │
+              ▼
+Maintenance, portfolio, and commercial systems
+├── Deadlines, renewals, and maintenance
+├── Portfolio administration
+├── Assignments and ownership changes
+├── Licensing and transfers
+├── Diligence and transaction rooms
+├── Commercialization and capital readiness
+└── Monitoring, watchdog, and enforcement support
+              │
+              ▼
+Trust and infrastructure layer
+├── Encrypted evidence vaults
+├── Versioned policy and examination rules
+├── Trusted timestamps and external anchoring
+├── Audit and transparency records
+├── Payment and fee processing
+├── Notifications and correspondence
+└── Preservation, export, and recovery
 ```
 
 ## Protection and registration services
@@ -185,6 +266,17 @@ IPX
 └── IPX Trust API™
 ```
 
+## Governance and decision authority
+
+IPX separates automated assistance from consequential legal, ownership, and examination authority.
+
+- Rules, examination policies, certificate policies, and practice statements are versioned.
+- Historical records remain verifiable under the policy and key versions that governed them.
+- Human professionals and authorized decision-makers retain authority over consequential examination, ownership, legal, and dispute decisions.
+- Filing, examination, certificate, payment, assignment, and transaction operations are designed to be idempotent and auditable.
+- Public verification exposes only the minimum information required for the selected disclosure level.
+- Private IPX protection and government-issued statutory rights remain clearly distinguished without reducing IPX’s identity as the modern patent office.
+
 ## Commercial model and pricing direction
 
 IPX pricing is modeled on patent-office fee tiers while improving access and usability.
@@ -205,26 +297,21 @@ The pricing structure includes:
 - licensing, transfer, diligence, and transaction services;
 - global and jurisdiction-specific services.
 
-IPX is designed to improve access for independent inventors, disabled founders, minority founders, underserved communities, creators, small businesses, and organizations that are poorly served by legacy intellectual-property systems.
+## Intended outcomes
 
-## Trust, governance, and legal clarity
+IPX is intended to become a complete, modern intellectual-property institution that:
 
-- Versioned rules, examination policies, certificate policies, and practice statements
-- Historical verification under original policy and key versions
-- Clear separation between private IPX protection and government-issued statutory rights
-- No false government-affiliation claims
-- Role-based authority for applicants, owners, professionals, examiners, and administrators
-- Immutable filing, examination, certificate, and transaction history
-- Idempotent consequential operations
-- Chain-of-custody preservation
-- Revocation and status endpoints
-- Privacy-aware public records
-- Long-term export and independent verification
-- Human authority over consequential legal and ownership decisions
+- gives inventors and creators one place to protect and manage their work;
+- reduces the barriers created by fragmented systems and professional-service costs;
+- creates stronger records of ownership, contribution, provenance, examination, and lifecycle history;
+- enables private protection and evidence before, during, and after formal government processes;
+- connects intellectual-property protection directly to commercial opportunity;
+- supports professionals and enterprises through APIs, white-label services, and modern operational infrastructure;
+- preserves records so they remain exportable and independently verifiable over time.
 
 ## Repository boundary
 
-This repository is the controlled public product and technical-documentation surface for IPX. Proprietary production source, examination logic, certificate internals, cryptographic operating procedures, provider configurations, security controls, commercial assets, and customer evidence are maintained privately.
+This repository is the controlled public product, architecture, service, and technical-documentation surface for IPX. Proprietary production source, examination logic, certificate internals, cryptographic operating procedures, provider configurations, security controls, commercial assets, and customer evidence are maintained privately.
 
 ## Ownership and licensing
 
