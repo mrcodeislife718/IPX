@@ -55,7 +55,7 @@ create table public.evidence_items (
   record_id uuid not null references public.ip_records(id) on delete cascade,
   submitted_by uuid not null references auth.users(id),
   content_hash text not null,
-  storage_bucket text not null,
+  storage_bucket text not null default 'ipx-evidence',
   storage_path text not null,
   media_type text not null,
   byte_size bigint not null check (byte_size >= 0),
@@ -64,7 +64,8 @@ create table public.evidence_items (
   timestamp_receipt jsonb,
   metadata jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now(),
-  unique(record_id, content_hash)
+  unique(record_id, content_hash),
+  unique(storage_bucket, storage_path)
 );
 
 create table public.ip_events (
@@ -132,6 +133,7 @@ create table public.orders (
   user_id uuid not null references auth.users(id),
   quote_id uuid not null references public.price_quotes(id),
   stripe_customer_id text,
+  stripe_checkout_session_id text unique,
   stripe_payment_intent_id text unique,
   status public.billing_status not null default 'pending',
   amount_cents bigint not null,
@@ -178,14 +180,15 @@ alter table public.orders enable row level security;
 alter table public.idempotency_keys enable row level security;
 alter table public.audit_log enable row level security;
 
-create policy organizations_select on public.organizations for select to authenticated using (exists (select 1 from public.organization_members m where m.organization_id=id and m.user_id=(select auth.uid())));
+create policy organizations_select on public.organizations for select to authenticated using (created_by=(select auth.uid()) or exists (select 1 from public.organization_members m where m.organization_id=id and m.user_id=(select auth.uid())));
 create policy organizations_insert on public.organizations for insert to authenticated with check (created_by=(select auth.uid()));
-create policy members_select on public.organization_members for select to authenticated using (user_id=(select auth.uid()) or exists (select 1 from public.organization_members me where me.organization_id=organization_id and me.user_id=(select auth.uid()) and me.role in ('owner','admin')));
+create policy members_select_self on public.organization_members for select to authenticated using (user_id=(select auth.uid()));
+create policy members_insert_owner_bootstrap on public.organization_members for insert to authenticated with check (user_id=(select auth.uid()) and role='owner' and exists (select 1 from public.organizations o where o.id=organization_id and o.created_by=(select auth.uid())));
 create policy records_select on public.ip_records for select to authenticated using (exists (select 1 from public.organization_members m where m.organization_id=organization_id and m.user_id=(select auth.uid())));
 create policy records_insert on public.ip_records for insert to authenticated with check (owner_user_id=(select auth.uid()) and exists (select 1 from public.organization_members m where m.organization_id=organization_id and m.user_id=(select auth.uid()) and m.role in ('owner','admin','professional','member')));
 create policy records_update on public.ip_records for update to authenticated using (exists (select 1 from public.organization_members m where m.organization_id=organization_id and m.user_id=(select auth.uid()) and m.role in ('owner','admin','professional'))) with check (exists (select 1 from public.organization_members m where m.organization_id=organization_id and m.user_id=(select auth.uid()) and m.role in ('owner','admin','professional')));
 create policy evidence_select on public.evidence_items for select to authenticated using (exists (select 1 from public.ip_records r join public.organization_members m on m.organization_id=r.organization_id where r.id=record_id and m.user_id=(select auth.uid())));
-create policy evidence_insert on public.evidence_items for insert to authenticated with check (submitted_by=(select auth.uid()) and exists (select 1 from public.ip_records r join public.organization_members m on m.organization_id=r.organization_id where r.id=record_id and m.user_id=(select auth.uid()) and m.role in ('owner','admin','professional','member')));
+create policy evidence_insert on public.evidence_items for insert to authenticated with check (submitted_by=(select auth.uid()) and storage_bucket='ipx-evidence' and exists (select 1 from public.ip_records r join public.organization_members m on m.organization_id=r.organization_id where r.id=record_id and m.user_id=(select auth.uid()) and m.role in ('owner','admin','professional','member')));
 create policy events_select on public.ip_events for select to authenticated using (exists (select 1 from public.ip_records r join public.organization_members m on m.organization_id=r.organization_id where r.id=record_id and m.user_id=(select auth.uid())));
 create policy parties_select on public.ip_parties for select to authenticated using (exists (select 1 from public.ip_records r join public.organization_members m on m.organization_id=r.organization_id where r.id=record_id and m.user_id=(select auth.uid())));
 create policy cert_select on public.certificates for select to authenticated using (exists (select 1 from public.ip_records r join public.organization_members m on m.organization_id=r.organization_id where r.id=record_id and m.user_id=(select auth.uid())));
@@ -200,5 +203,15 @@ insert into storage.buckets (id,name,public,file_size_limit,allowed_mime_types)
 values ('ipx-evidence','ipx-evidence',false,104857600,null)
 on conflict (id) do update set public=false, file_size_limit=excluded.file_size_limit;
 
-create policy evidence_objects_select on storage.objects for select to authenticated using (bucket_id='ipx-evidence' and exists (select 1 from public.evidence_items e join public.ip_records r on r.id=e.record_id join public.organization_members m on m.organization_id=r.organization_id where e.storage_path=name and m.user_id=(select auth.uid())));
-create policy evidence_objects_insert on storage.objects for insert to authenticated with check (bucket_id='ipx-evidence');
+create policy evidence_objects_select on storage.objects for select to authenticated using (
+  bucket_id='ipx-evidence'
+  and exists (
+    select 1 from public.evidence_items e
+    join public.ip_records r on r.id=e.record_id
+    join public.organization_members m on m.organization_id=r.organization_id
+    where e.storage_bucket=bucket_id and e.storage_path=name and m.user_id=(select auth.uid())
+  )
+);
+
+-- Direct client uploads are intentionally denied. The production API creates short-lived signed upload URLs
+-- only after checking organization membership, record ownership, content metadata, and audit context.
