@@ -1,0 +1,17 @@
+{
+  "name": "ipx-private-modern-patent-office",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/server.js && node --check src/core.js && node --check src/pricing.js && node --check src/security.js && npm test && node scripts/verify-portfolio-proof.mjs && node scripts/verify-repository-hygiene.mjs",
+    "qualify:production": "node scripts/qualify-production.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.112.4",
+    "stripe": "22.6.1"
+  }
+}
