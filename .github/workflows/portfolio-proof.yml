@@ -1,10 +1,29 @@
-name: Portfolio Proof Gate
-on: [push, pull_request]
+name: IPX Trust and Proof Gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
 jobs:
-  proof:
+  trust-gates:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: {node-version: 22}
-      - run: node scripts/verify-portfolio-proof.mjs
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Verify evidence claims
+        run: node scripts/verify-portfolio-proof.mjs
+
+      - name: Verify repository hygiene
+        run: node scripts/verify-repository-hygiene.mjs
