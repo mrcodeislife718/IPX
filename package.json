@@ -1,13 +1,13 @@
 {
   "name": "ipx-private-modern-patent-office",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22" },
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test test/*.test.js",
-    "check:syntax": "node --check src/server.js && node --check src/core.js && node --check src/pricing.js && node --check src/security.js && node --check src/evidence.js && node --check src/anchoring.js && node --check src/watchdog.js && node --check src/watchdog-provider-brave.js",
+    "check:syntax": "node --check src/server.js && node --check src/core.js && node --check src/pricing.js && node --check src/security.js && node --check src/evidence.js && node --check src/anchoring.js && node --check src/watchdog.js && node --check src/watchdog-provider-brave.js && node --check src/billing.js && node --check src/workflows.js && node --check src/search-engine.js",
     "check": "npm run check:syntax && npm test && node scripts/verify-portfolio-proof.mjs && node scripts/verify-repository-hygiene.mjs && node scripts/qualify-production.mjs",
     "qualify:production": "node scripts/qualify-production.mjs",
     "fees:sync": "node scripts/sync-uspto-fees.mjs"
