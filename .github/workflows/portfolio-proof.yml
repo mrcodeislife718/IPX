@@ -1,4 +1,4 @@
-name: IPX Trust and Proof Gates
+name: IPX Trust and Production Gates
 
 on:
   push:
@@ -10,9 +10,9 @@ permissions:
   contents: read
 
 jobs:
-  trust-gates:
+  production-gates:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,9 +21,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
-      - name: Verify evidence claims
-        run: node scripts/verify-portfolio-proof.mjs
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
 
-      - name: Verify repository hygiene
-        run: node scripts/verify-repository-hygiene.mjs
+      - name: Run complete repository checks
+        run: npm run check
