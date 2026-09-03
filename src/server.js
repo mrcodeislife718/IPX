@@ -5,6 +5,7 @@ import Stripe from 'stripe';
 import { requireEnv, bearerToken, readBody, jsonResponse, requestId, clientIp, safeText, safeSlug, safeUuid, sha256, stableJson } from './security.js';
 import { ASSET_TYPES, recordHash, eventHash } from './core.js';
 import { buildParityQuote } from './pricing.js';
+import { loadRecurringOffering } from './commercial.js';
 import { normalizeObservation, scorePotentialMisuse, shouldAlert, buildEvidenceSnapshot } from './watchdog.js';
 import { buildEvidenceStoragePath, evidenceManifest, validateUploadMetadata } from './evidence.js';
 
@@ -161,26 +162,51 @@ async function checkout(req, res, rid, user) {
   return jsonResponse(res, 201, { checkout_url: session.url, request_id: rid });
 }
 
-const WATCHDOG_TIERS = {
-  individual: { amount: 1900, max_assets: 3, scan_interval_minutes: 1440 },
-  professional: { amount: 7900, max_assets: 25, scan_interval_minutes: 360 },
-  enterprise: { amount: 29900, max_assets: 250, scan_interval_minutes: 60 }
-};
-
 async function createWatchdogSubscription(req, res, rid, user) {
   const body = await jsonBody(req);
   const organizationId = safeUuid(body.organization_id);
   await requireMembership(user.id, organizationId, ['owner','admin','professional','member']);
-  const tier = safeText(body.tier, { min: 3, max: 32 });
-  const plan = WATCHDOG_TIERS[tier];
-  if (!plan) throw httpError('Unsupported Watchdog tier', 400);
-  const { data: row, error } = await admin.from('watchdog_subscriptions').insert({ organization_id: organizationId, user_id: user.id, tier, status: 'pending', max_assets: plan.max_assets, scan_interval_minutes: plan.scan_interval_minutes }).select().single();
+  const planKey = safeText(body.plan || body.tier || 'not_applicable', { min: 3, max: 64 });
+  const plan = await loadRecurringOffering(admin, 'ipx-watchdog', planKey);
+  const { data: row, error } = await admin.from('watchdog_subscriptions').insert({
+    organization_id: organizationId,
+    user_id: user.id,
+    tier: plan.plan_key,
+    service_catalog_id: plan.service_catalog_id,
+    status: 'pending',
+    max_assets: plan.max_assets,
+    scan_interval_minutes: plan.scan_interval_minutes,
+    commercial_terms: plan.commercial_terms
+  }).select().single();
   if (error) throw error;
-  const session = await stripe.checkout.sessions.create({ mode: 'subscription', success_url: `${process.env.IPX_PUBLIC_ORIGIN}/watchdog/success?session_id={CHECKOUT_SESSION_ID}`, cancel_url: `${process.env.IPX_PUBLIC_ORIGIN}/watchdog/cancel`, customer_email: user.email || undefined, line_items: [{ quantity: 1, price_data: { currency: 'usd', unit_amount: plan.amount, recurring: { interval: 'month' }, product_data: { name: `IPX Watchdog ${tier}`, description: 'Continuous monitoring for possible IP misuse with evidence-preserving alerts.' } } }], metadata: { purchase_kind: 'watchdog', watchdog_subscription_id: row.id, organization_id: organizationId, user_id: user.id, tier } }, { idempotencyKey: `ipx-watchdog-${row.id}` });
+  const session = await stripe.checkout.sessions.create({
+    mode: 'subscription',
+    success_url: `${process.env.IPX_PUBLIC_ORIGIN}/watchdog/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${process.env.IPX_PUBLIC_ORIGIN}/watchdog/cancel`,
+    customer_email: user.email || undefined,
+    line_items: [{
+      quantity: 1,
+      price_data: {
+        currency: plan.currency.toLowerCase(),
+        unit_amount: plan.amount_cents,
+        recurring: { interval: plan.recurring_interval },
+        product_data: { name: `${plan.display_name} — ${plan.plan_key}`, description: 'Continuous monitoring for possible IP misuse with evidence-preserving alerts.' }
+      }
+    }],
+    metadata: {
+      purchase_kind: 'watchdog',
+      watchdog_subscription_id: row.id,
+      service_catalog_id: plan.service_catalog_id,
+      service_price_id: plan.service_price_id,
+      organization_id: organizationId,
+      user_id: user.id,
+      plan: plan.plan_key
+    }
+  }, { idempotencyKey: `ipx-watchdog-${row.id}` });
   const { error: updateError } = await admin.from('watchdog_subscriptions').update({ stripe_checkout_session_id: session.id, updated_at: new Date().toISOString() }).eq('id', row.id);
   if (updateError) throw updateError;
-  await audit({ organizationId, userId: user.id, action: 'watchdog.subscription_checkout_created', targetType: 'watchdog_subscription', targetId: row.id, req, rid, metadata: { tier } });
-  return jsonResponse(res, 201, { subscription_id: row.id, checkout_url: session.url, tier, request_id: rid });
+  await audit({ organizationId, userId: user.id, action: 'watchdog.subscription_checkout_created', targetType: 'watchdog_subscription', targetId: row.id, req, rid, metadata: { plan: plan.plan_key, service_price_id: plan.service_price_id, amount_cents: plan.amount_cents, currency: plan.currency } });
+  return jsonResponse(res, 201, { subscription_id: row.id, checkout_url: session.url, plan: plan.plan_key, request_id: rid });
 }
 
 async function enrollWatchdogAsset(req, res, rid, user) {

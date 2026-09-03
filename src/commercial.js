@@ -6,6 +6,47 @@ export async function loadCurrentService(admin, serviceCode, today=new Date().to
   if(error)throw error; if(!data)throw Object.assign(new Error('IPX service unavailable'),{statusCode:404}); return data;
 }
 
+export function resolveRecurringOffering({service,price}) {
+  if (!service?.active) throw Object.assign(new Error('IPX service unavailable'), { statusCode: 404 });
+  if (service.pricing_basis !== 'recurring') throw Object.assign(new Error('Service is not recurring'), { statusCode: 409 });
+  if (!['month','year'].includes(service.recurring_interval)) throw Object.assign(new Error('Recurring interval is not configured'), { statusCode: 503 });
+  const amount = Number(price?.amount_cents);
+  if (!Number.isSafeInteger(amount) || amount < 0) throw Object.assign(new Error('Recurring service price is not configured'), { statusCode: 503 });
+  const maxAssetsRaw = price?.metadata?.max_assets ?? service?.commercial_rules?.max_assets ?? null;
+  const scanIntervalRaw = price?.metadata?.scan_interval_minutes ?? service?.commercial_rules?.scan_interval_minutes ?? null;
+  const maxAssets = maxAssetsRaw == null ? null : Number(maxAssetsRaw);
+  const scanIntervalMinutes = scanIntervalRaw == null ? null : Number(scanIntervalRaw);
+  if (maxAssets != null && (!Number.isSafeInteger(maxAssets) || maxAssets < 1)) throw Object.assign(new Error('Recurring plan max_assets is invalid'), { statusCode: 503 });
+  if (scanIntervalMinutes != null && (!Number.isSafeInteger(scanIntervalMinutes) || scanIntervalMinutes < 1)) throw Object.assign(new Error('Recurring plan scan_interval_minutes is invalid'), { statusCode: 503 });
+  return {
+    service_catalog_id: service.id,
+    service_price_id: price.id,
+    service_code: service.service_code,
+    plan_key: price.entity_tier || 'not_applicable',
+    display_name: price?.metadata?.display_name || service.name,
+    amount_cents: amount,
+    currency: (price.currency || 'USD').toUpperCase(),
+    recurring_interval: service.recurring_interval,
+    max_assets: maxAssets,
+    scan_interval_minutes: scanIntervalMinutes,
+    commercial_terms: {
+      ...(service.commercial_rules || {}),
+      ...(price.metadata || {}),
+      service_price_id: price.id,
+      pricing_basis: service.pricing_basis,
+      recurring_interval: service.recurring_interval
+    }
+  };
+}
+
+export async function loadRecurringOffering(admin, serviceCode, planKey='not_applicable', today=new Date().toISOString().slice(0,10)) {
+  const service = await loadCurrentService(admin, serviceCode, today);
+  const {data:price,error}=await admin.from('service_prices').select('*').eq('service_catalog_id',service.id).eq('entity_tier',planKey).lte('effective_from',today).or(`effective_to.is.null,effective_to.gte.${today}`).order('effective_from',{ascending:false}).limit(1).maybeSingle();
+  if(error)throw error;
+  if(!price)throw Object.assign(new Error('Recurring service plan is not configured'),{statusCode:404});
+  return resolveRecurringOffering({service,price});
+}
+
 export async function createCatalogQuote({admin,organizationId,userId,serviceCode,entityTier='not_applicable',quantity=1,includedValue=[],optionalAddOns=[]}) {
   const service=await loadCurrentService(admin,serviceCode);
   if(service.pricing_basis==='reference_parity'){
