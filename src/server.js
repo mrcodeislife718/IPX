@@ -155,8 +155,9 @@ async function checkout(req, res, rid, user) {
   if (error || !q) throw httpError('Quote not found', 404);
   if (new Date(q.expires_at) <= new Date()) throw httpError('Quote expired', 409);
   await requireMembership(user.id, q.organization_id);
-  const session = await stripe.checkout.sessions.create({ mode: 'payment', success_url: `${process.env.IPX_PUBLIC_ORIGIN}/billing/success?session_id={CHECKOUT_SESSION_ID}`, cancel_url: `${process.env.IPX_PUBLIC_ORIGIN}/billing/cancel`, client_reference_id: q.id, customer_email: user.email || undefined, line_items: [{ quantity: 1, price_data: { currency: q.currency.toLowerCase(), unit_amount: q.total_cents, product_data: { name: `IPX ${q.service_code}`, description: 'Private IPX service. Government filing fees are separate unless explicitly stated.' } } }], metadata: { purchase_kind: 'service', quote_id: q.id, service_code: q.service_code, organization_id: q.organization_id, user_id: user.id } }, { idempotencyKey: `ipx-checkout-${q.quote_hash}` });
-  const { error: orderError } = await admin.from('orders').insert({ organization_id: q.organization_id, user_id: user.id, quote_id: q.id, stripe_checkout_session_id: session.id, status: 'pending', amount_cents: q.total_cents, currency: q.currency });
+  const paymentMetadata = { purchase_kind: 'service', quote_id: q.id, service_code: q.service_code, organization_id: q.organization_id, user_id: user.id };
+  const session = await stripe.checkout.sessions.create({ mode: 'payment', success_url: `${process.env.IPX_PUBLIC_ORIGIN}/billing/success?session_id={CHECKOUT_SESSION_ID}`, cancel_url: `${process.env.IPX_PUBLIC_ORIGIN}/billing/cancel`, client_reference_id: q.id, customer_email: user.email || undefined, line_items: [{ quantity: 1, price_data: { currency: q.currency.toLowerCase(), unit_amount: q.total_cents, product_data: { name: `IPX ${q.service_code}`, description: 'Private IPX service. Government filing fees are separate unless explicitly stated.' } } }], metadata: paymentMetadata, payment_intent_data: { metadata: paymentMetadata } }, { idempotencyKey: `ipx-checkout-${q.quote_hash}` });
+  const { error: orderError } = await admin.from('orders').insert({ organization_id: q.organization_id, user_id: user.id, quote_id: q.id, stripe_checkout_session_id: session.id, stripe_payment_intent_id: typeof session.payment_intent === 'string' ? session.payment_intent : null, status: 'pending', amount_cents: q.total_cents, currency: q.currency });
   if (orderError) throw orderError;
   await audit({ organizationId: q.organization_id, userId: user.id, action: 'checkout.created', targetType: 'stripe_checkout_session', targetId: session.id, req, rid, metadata: { quote_id: q.id } });
   return jsonResponse(res, 201, { checkout_url: session.url, request_id: rid });
@@ -179,6 +180,15 @@ async function createWatchdogSubscription(req, res, rid, user) {
     commercial_terms: plan.commercial_terms
   }).select().single();
   if (error) throw error;
+  const subscriptionMetadata = {
+    purchase_kind: 'watchdog',
+    watchdog_subscription_id: row.id,
+    service_catalog_id: plan.service_catalog_id,
+    service_price_id: plan.service_price_id,
+    organization_id: organizationId,
+    user_id: user.id,
+    plan: plan.plan_key
+  };
   const session = await stripe.checkout.sessions.create({
     mode: 'subscription',
     success_url: `${process.env.IPX_PUBLIC_ORIGIN}/watchdog/success?session_id={CHECKOUT_SESSION_ID}`,
@@ -193,15 +203,8 @@ async function createWatchdogSubscription(req, res, rid, user) {
         product_data: { name: `${plan.display_name} — ${plan.plan_key}`, description: 'Continuous monitoring for possible IP misuse with evidence-preserving alerts.' }
       }
     }],
-    metadata: {
-      purchase_kind: 'watchdog',
-      watchdog_subscription_id: row.id,
-      service_catalog_id: plan.service_catalog_id,
-      service_price_id: plan.service_price_id,
-      organization_id: organizationId,
-      user_id: user.id,
-      plan: plan.plan_key
-    }
+    metadata: subscriptionMetadata,
+    subscription_data: { metadata: subscriptionMetadata }
   }, { idempotencyKey: `ipx-watchdog-${row.id}` });
   const { error: updateError } = await admin.from('watchdog_subscriptions').update({ stripe_checkout_session_id: session.id, updated_at: new Date().toISOString() }).eq('id', row.id);
   if (updateError) throw updateError;
@@ -252,24 +255,81 @@ async function watchdogIngest(req, res, rid, user) {
   return jsonResponse(res, 201, { match, score, alert_created: shouldAlert(score), evidence_hash: snapshot.evidence_hash, request_id: rid });
 }
 
-async function fulfillServiceCheckout(session) {
-  const quoteId = session.metadata?.quote_id;
-  if (!quoteId) return;
+async function claimStripeEvent(event) {
+  const now = new Date().toISOString();
+  const { error } = await admin.from('webhook_events').insert({ provider: 'stripe', event_id: event.id, event_type: event.type, status: 'processing', received_at: now, processed_at: null, last_error: null });
+  if (!error) return true;
+  if (error.code !== '23505') throw error;
+  const { data: reclaimed, error: reclaimError } = await admin.from('webhook_events').update({ status: 'processing', event_type: event.type, received_at: now, processed_at: null, last_error: null }).eq('provider','stripe').eq('event_id',event.id).eq('status','failed').select('event_id').maybeSingle();
+  if (reclaimError) throw reclaimError;
+  return Boolean(reclaimed);
+}
+
+async function finishStripeEvent(eventId) {
+  const { error } = await admin.from('webhook_events').update({ status: 'processed', processed_at: new Date().toISOString(), last_error: null }).eq('provider','stripe').eq('event_id',eventId).eq('status','processing');
+  if (error) throw error;
+}
+
+async function failStripeEvent(eventId, error) {
+  const { error: updateError } = await admin.from('webhook_events').update({ status: 'failed', processed_at: new Date().toISOString(), last_error: String(error?.message || error).slice(0,2000) }).eq('provider','stripe').eq('event_id',eventId).eq('status','processing');
+  if (updateError) console.error(JSON.stringify({ event: 'stripe.webhook.failure_persist_failed', event_id: eventId, error: updateError.message }));
+}
+
+async function orderForCheckout(session) {
   const { data: order, error } = await admin.from('orders').select('*,price_quotes!inner(service_code)').eq('stripe_checkout_session_id', session.id).maybeSingle();
   if (error) throw error;
-  if (!order || order.fulfilled_at) return;
+  if (!order) return null;
+  if (session.metadata?.quote_id && session.metadata.quote_id !== order.quote_id) throw new Error('Stripe checkout quote ownership mismatch');
+  if (session.metadata?.organization_id && session.metadata.organization_id !== order.organization_id) throw new Error('Stripe checkout organization ownership mismatch');
+  if (session.metadata?.user_id && session.metadata.user_id !== order.user_id) throw new Error('Stripe checkout user ownership mismatch');
+  return order;
+}
+
+async function fulfillPaidServiceCheckout(session, eventCreatedAt) {
+  const order = await orderForCheckout(session);
+  if (!order) return;
+  const paymentIntentId = typeof session.payment_intent === 'string' ? session.payment_intent : order.stripe_payment_intent_id;
+  const linkPatch = { stripe_payment_intent_id: paymentIntentId || null, updated_at: new Date().toISOString() };
+  const { error: linkError } = await admin.from('orders').update(linkPatch).eq('id',order.id);
+  if (linkError) throw linkError;
+  if (session.payment_status !== 'paid') return;
   const now = new Date().toISOString();
-  const { error: updateError } = await admin.from('orders').update({ status: 'active', stripe_payment_intent_id: typeof session.payment_intent === 'string' ? session.payment_intent : null, fulfilled_at: now, updated_at: now }).eq('id', order.id).is('fulfilled_at', null);
+  const { data: activated, error: updateError } = await admin.from('orders').update({ status: 'active', stripe_payment_intent_id: paymentIntentId || null, fulfilled_at: now, stripe_state_event_created_at: eventCreatedAt, updated_at: now }).eq('id', order.id).is('fulfilled_at', null).lte('stripe_state_event_created_at', eventCreatedAt).select('id').maybeSingle();
   if (updateError) throw updateError;
-  const { error: entitlementError } = await admin.from('service_entitlements').insert({ organization_id: order.organization_id, user_id: order.user_id, order_id: order.id, service_code: order.price_quotes.service_code, status: 'active', quantity: 1, metadata: { stripe_checkout_session_id: session.id } });
+  if (!activated) return;
+  const { error: entitlementError } = await admin.from('service_entitlements').insert({ organization_id: order.organization_id, user_id: order.user_id, order_id: order.id, service_code: order.price_quotes.service_code, status: 'active', quantity: 1, metadata: { stripe_checkout_session_id: session.id, stripe_payment_intent_id: paymentIntentId || null } });
   if (entitlementError && entitlementError.code !== '23505') throw entitlementError;
 }
 
-async function fulfillWatchdogCheckout(session) {
+async function linkWatchdogCheckout(session) {
   const subscriptionId = session.metadata?.watchdog_subscription_id;
   if (!subscriptionId) return;
+  const { data: row, error: readError } = await admin.from('watchdog_subscriptions').select('id,organization_id,user_id,stripe_checkout_session_id,stripe_subscription_id,status').eq('id',subscriptionId).maybeSingle();
+  if (readError) throw readError;
+  if (!row) return;
+  if (row.stripe_checkout_session_id && row.stripe_checkout_session_id !== session.id) throw new Error('Stripe checkout does not match Watchdog subscription');
+  if (session.metadata?.organization_id && session.metadata.organization_id !== row.organization_id) throw new Error('Stripe Watchdog organization ownership mismatch');
+  if (session.metadata?.user_id && session.metadata.user_id !== row.user_id) throw new Error('Stripe Watchdog user ownership mismatch');
   const stripeSubscriptionId = typeof session.subscription === 'string' ? session.subscription : null;
-  const { error } = await admin.from('watchdog_subscriptions').update({ status: 'active', stripe_subscription_id: stripeSubscriptionId, updated_at: new Date().toISOString() }).eq('id', subscriptionId).eq('stripe_checkout_session_id', session.id);
+  if (row.stripe_subscription_id && stripeSubscriptionId && row.stripe_subscription_id !== stripeSubscriptionId) throw new Error('Stripe subscription does not match Watchdog ownership');
+  const { error } = await admin.from('watchdog_subscriptions').update({ stripe_subscription_id: stripeSubscriptionId || row.stripe_subscription_id || null, updated_at: new Date().toISOString() }).eq('id',subscriptionId);
+  if (error) throw error;
+}
+
+async function applyWatchdogSubscription(sub, eventCreatedAt) {
+  const metadataId = sub.metadata?.watchdog_subscription_id;
+  let query = admin.from('watchdog_subscriptions').select('*');
+  query = metadataId ? query.eq('id',metadataId) : query.eq('stripe_subscription_id',sub.id);
+  const { data: row, error: readError } = await query.maybeSingle();
+  if (readError) throw readError;
+  if (!row) return;
+  if (sub.metadata?.organization_id && sub.metadata.organization_id !== row.organization_id) throw new Error('Stripe subscription organization ownership mismatch');
+  if (sub.metadata?.user_id && sub.metadata.user_id !== row.user_id) throw new Error('Stripe subscription user ownership mismatch');
+  if (row.stripe_subscription_id && row.stripe_subscription_id !== sub.id) throw new Error('Stripe subscription is already bound to a different Watchdog record');
+  const status = ['active','trialing'].includes(sub.status) ? 'active' : ['past_due','unpaid','incomplete'].includes(sub.status) ? 'past_due' : ['canceled','incomplete_expired'].includes(sub.status) ? 'cancelled' : 'pending';
+  const unixPeriodEnd = sub.current_period_end ?? sub.items?.data?.[0]?.current_period_end;
+  const periodEnd = unixPeriodEnd ? new Date(unixPeriodEnd * 1000).toISOString() : null;
+  const { error } = await admin.from('watchdog_subscriptions').update({ status, stripe_subscription_id: sub.id, current_period_end: periodEnd, cancel_at_period_end: Boolean(sub.cancel_at_period_end), stripe_state_event_created_at: eventCreatedAt, updated_at: new Date().toISOString() }).eq('id',row.id).lte('stripe_state_event_created_at',eventCreatedAt);
   if (error) throw error;
 }
 
@@ -279,19 +339,23 @@ async function stripeWebhook(req, res, rid) {
   let event;
   try { event = stripe.webhooks.constructEvent(raw, signature, process.env.STRIPE_WEBHOOK_SECRET); }
   catch { return jsonResponse(res, 400, { error: 'invalid_webhook_signature', request_id: rid }); }
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
-    if (session.metadata?.purchase_kind === 'watchdog') await fulfillWatchdogCheckout(session);
-    else await fulfillServiceCheckout(session);
+  const claimed = await claimStripeEvent(event);
+  if (!claimed) return jsonResponse(res, 200, { received: true, duplicate: true, request_id: rid });
+  try {
+    if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
+      const session = event.data.object;
+      if (session.metadata?.purchase_kind === 'watchdog') await linkWatchdogCheckout(session);
+      else await fulfillPaidServiceCheckout(session, event.created);
+    }
+    if (['customer.subscription.created','customer.subscription.updated','customer.subscription.deleted'].includes(event.type)) {
+      await applyWatchdogSubscription(event.data.object, event.created);
+    }
+    await finishStripeEvent(event.id);
+    return jsonResponse(res, 200, { received: true, request_id: rid });
+  } catch (error) {
+    await failStripeEvent(event.id, error);
+    throw error;
   }
-  if (['customer.subscription.updated','customer.subscription.deleted'].includes(event.type)) {
-    const sub = event.data.object;
-    const status = ['active','trialing'].includes(sub.status) ? 'active' : sub.status === 'past_due' ? 'past_due' : 'cancelled';
-    const periodEnd = sub.items?.data?.[0]?.current_period_end ? new Date(sub.items.data[0].current_period_end * 1000).toISOString() : null;
-    const { error } = await admin.from('watchdog_subscriptions').update({ status, current_period_end: periodEnd, cancel_at_period_end: Boolean(sub.cancel_at_period_end), updated_at: new Date().toISOString() }).eq('stripe_subscription_id', sub.id);
-    if (error) throw error;
-  }
-  return jsonResponse(res, 200, { received: true, request_id: rid });
 }
 
 const server = http.createServer(async (req, res) => {
