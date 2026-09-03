@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { invoiceNumber, buildInvoice, paymentIntentSpec } from '../src/billing.js';
+import { resolveRecurringOffering } from '../src/commercial.js';
 import { workflowFor, deadlineState } from '../src/workflows.js';
 import { combinedSearchScore, dedupeSearchResults } from '../src/search-engine.js';
 
@@ -16,6 +17,26 @@ test('IPX owns invoice identity and Stripe receives processor spec',()=>{
 test('office workflows are deterministic and Watchdog is capability not invented tier',()=>{
   assert.ok(workflowFor('ipx-patent-utility').length>=8);
   assert.deepEqual(workflowFor('ipx-watchdog').map(x=>x.task_code).slice(0,3),['enroll','fingerprint','source-plan']);
+});
+
+test('Watchdog commercial plan is resolved from catalog data rather than source constants',()=>{
+  const plan=resolveRecurringOffering({
+    service:{id:'svc-watchdog',service_code:'ipx-watchdog',name:'IPX Watchdog',active:true,pricing_basis:'recurring',recurring_interval:'month',commercial_rules:{evidence_preservation:true}},
+    price:{id:'price-pro',entity_tier:'professional',currency:'USD',amount_cents:12500,metadata:{display_name:'IPX Watchdog Professional',max_assets:40,scan_interval_minutes:180}}
+  });
+  assert.equal(plan.amount_cents,12500);
+  assert.equal(plan.plan_key,'professional');
+  assert.equal(plan.max_assets,40);
+  assert.equal(plan.scan_interval_minutes,180);
+  assert.equal(plan.recurring_interval,'month');
+  assert.equal(plan.commercial_terms.service_price_id,'price-pro');
+});
+
+test('recurring commercial plan fails closed when price is not configured',()=>{
+  assert.throws(()=>resolveRecurringOffering({
+    service:{id:'svc-watchdog',service_code:'ipx-watchdog',name:'IPX Watchdog',active:true,pricing_basis:'recurring',recurring_interval:'month'},
+    price:null
+  }),/price is not configured/);
 });
 
 test('deadline urgency is deterministic',()=>{
